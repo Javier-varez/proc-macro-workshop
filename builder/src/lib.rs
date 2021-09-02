@@ -1,7 +1,7 @@
 use proc_macro::TokenStream;
 
 use quote::quote;
-use syn::{parse_macro_input, DeriveInput};
+use syn::{parse_macro_input, spanned::Spanned, DeriveInput};
 
 #[proc_macro_derive(Builder, attributes(builder))]
 pub fn derive(input: TokenStream) -> TokenStream {
@@ -55,8 +55,14 @@ pub fn derive(input: TokenStream) -> TokenStream {
         let name = &f.ident;
         let ty = &f.ty;
 
-        // // Let's get the supported attributes for the current field
-        let attributes = parse_attributes(&f.attrs);
+        // Let's get the supported attributes for the current field
+        let attributes = match parse_attributes(&f.attrs) {
+            Ok(attrs) => attrs,
+            Err(token_stream) => {
+                return Some(token_stream.to_compile_error());
+            }
+        };
+
         let each_attr = attributes.iter().find_map(|e| match e {
             BuilderAttribute::Each(name) => Some(name),
         });
@@ -104,7 +110,13 @@ pub fn derive(input: TokenStream) -> TokenStream {
         // // Let's get the supported attributes for the current field
 
         if field_is_vec(&f) {
-            let attributes = parse_attributes(&f.attrs);
+            let attributes = match parse_attributes(&f.attrs) {
+                Ok(attrs) => attrs,
+                Err(token_stream) => {
+                    return Some(token_stream.to_compile_error());
+                }
+            };
+
             let each_attr = attributes.iter().find_map(|e| match e {
                 BuilderAttribute::Each(name) => Some(name),
             });
@@ -210,23 +222,38 @@ enum BuilderAttribute {
     Each(String),
 }
 
-fn parse_attributes(attrs: &Vec<syn::Attribute>) -> Vec<BuilderAttribute> {
+fn parse_attributes(attrs: &Vec<syn::Attribute>) -> syn::Result<Vec<BuilderAttribute>> {
     let mut result: Vec<BuilderAttribute> = vec![];
-    attrs.iter().for_each(|attr| {
+    for attr in attrs {
         let meta = attr
             .parse_meta()
             .expect("Error parsing metadata of the 'builder' attribute");
         match meta {
-            syn::Meta::List(syn::MetaList { path, nested, .. }) => {
-                assert!(path.segments.len() == 1 && path.segments[0].ident == "builder");
+            syn::Meta::List(syn::MetaList {
+                ref path,
+                ref nested,
+                ..
+            }) => {
+                if path.segments.len() != 1 || path.segments[0].ident != "builder" {
+                    return Err(syn::Error::new(
+                        meta.span(),
+                        "expected `builder(each = \"...\")`",
+                    ));
+                }
 
                 if let Some(syn::NestedMeta::Meta(syn::Meta::NameValue(syn::MetaNameValue {
-                    path,
+                    path: path2,
                     lit,
                     ..
                 }))) = nested.first()
                 {
-                    assert!(path.segments.len() == 1 && path.segments[0].ident == "each");
+                    if path2.segments.len() != 1 || path2.segments[0].ident != "each" {
+                        return Err(syn::Error::new_spanned(
+                            meta,
+                            "expected `builder(each = \"...\")`",
+                        ));
+                    }
+
                     if let syn::Lit::Str(lit) = lit {
                         result.push(BuilderAttribute::Each(lit.value()));
                     } else {
@@ -241,7 +268,7 @@ fn parse_attributes(attrs: &Vec<syn::Attribute>) -> Vec<BuilderAttribute> {
                 );
             }
         }
-    });
+    }
 
-    result
+    Ok(result)
 }
