@@ -185,7 +185,7 @@ pub fn derive(input: TokenStream) -> TokenStream {
             #(#methods)*
             #(#method_ext)*
 
-            pub fn build(&self) -> Result<#name, Box<dyn std::error::Error>> {
+            pub fn build(&self) -> std::result::Result<#name, std::boxed::Box<dyn std::error::Error>> {
                 Ok(#name {
                     #(#build_tokens,)*
                 })
