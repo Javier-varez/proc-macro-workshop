@@ -50,17 +50,6 @@ impl Parse for Range {
 }
 
 /// Abstraction over the syntax of the seq! macro.
-/// ```rust
-///     use seq::seq;
-///     seq!(N in 0..16 {
-///         #[derive(Copy, Clone, Debug, PartialEq)]
-///         enum Interrupt {
-///             #(
-///                 Irq#N,
-///             )*
-///         }
-///     });
-/// ```
 struct SeqItem {
     ident: syn::Ident,
     range: Range,
@@ -177,6 +166,7 @@ impl SeqItem {
         }
     }
 
+    /// Expands the given stream, looking for identifiers to replace.
     fn expand_stream(&self, template_stream: &TokenStream) -> TokenStream {
         let mut stream = TokenStream::new();
         for i in self.range.iter() {
@@ -193,6 +183,7 @@ impl SeqItem {
         stream
     }
 
+    /// Expands the complete SeqItem into a single TokenStream
     fn expand(&self) -> TokenStream {
         match self.mode {
             Mode::RepeatBody => self.expand_stream(&self.body),
@@ -207,6 +198,15 @@ impl SeqItem {
         }
     }
 
+    /// Maps a TokenTree into its replacement or itself if it is not supposed to be replaced.
+    /// Sometimes more than one TokenTree is replaced, which is why we also pass the iterator with
+    /// the remaining Tokens.
+    ///
+    ///   - When finding a `N` token it will replace it by the passed replacement token tree.
+    ///   - When finding a `Irq#N` it will replace `N` it by the passed replacement token tree and join
+    /// it with the previous identifier into a single identifier. This allows the user to
+    /// concatenate into an identifier.
+    ///
     fn map_identifier_recursive(
         &self,
         replacement: &TokenTree,
@@ -257,6 +257,19 @@ impl SeqItem {
     }
 }
 
+/// The seq! proc macro. Expands the given body a number of times replacing a given identifier.
+///
+/// ```rust
+///     use seq::seq;
+///     seq!(N in 0..16 {
+///         #[derive(Copy, Clone, Debug, PartialEq)]
+///         enum Interrupt {
+///             #(
+///                 Irq#N,
+///             )*
+///         }
+///     });
+/// ```
 #[proc_macro]
 pub fn seq(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let seq_item = parse_macro_input!(input as SeqItem);
