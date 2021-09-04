@@ -32,32 +32,64 @@ impl SeqItem {
     fn expand(&self) -> proc_macro2::TokenStream {
         let start: u32 = self.start.base10_parse().unwrap();
         let end: u32 = self.end.base10_parse().unwrap();
-        let body = &self.body;
 
         let mut stream = TokenStream::new();
         for i in start..end {
             let replacement_identifier = TokenTree::Literal(Literal::u32_unsuffixed(i));
-            stream.extend(
-                body.clone()
-                    .into_iter()
-                    .map(|token| self.map_identifier_recursive(&replacement_identifier, token)),
-            );
+
+            let mut iter = self.body.clone().into_iter();
+            while let Some(token) = iter.next() {
+                stream.extend(std::iter::once(self.map_identifier_recursive(
+                    &replacement_identifier,
+                    token,
+                    &mut iter,
+                )));
+            }
         }
         stream
     }
 
-    fn map_identifier_recursive(&self, replacement: &TokenTree, tree: TokenTree) -> TokenTree {
+    fn map_identifier_recursive(
+        &self,
+        replacement: &TokenTree,
+        tree: TokenTree,
+        remaining: &mut proc_macro2::token_stream::IntoIter,
+    ) -> TokenTree {
         match tree {
             TokenTree::Ident(ident) if ident == self.ident => replacement.clone(),
+            TokenTree::Ident(first_ident) => {
+                let mut lookup_iter = remaining.clone();
+                match lookup_iter.next() {
+                    Some(TokenTree::Punct(punct)) if punct.as_char() == '#' => {
+                        match lookup_iter.next() {
+                            Some(TokenTree::Ident(ident)) if ident == self.ident => {
+                                // Matched arguments, let's consume them from the original iterator
+                                remaining.next().unwrap();
+                                remaining.next().unwrap();
+
+                                let actual_str = format!("{}{}", first_ident, replacement);
+                                let actual_ident =
+                                    proc_macro2::Ident::new(&actual_str, first_ident.span());
+
+                                TokenTree::Ident(actual_ident)
+                            }
+                            _ => TokenTree::Ident(first_ident),
+                        }
+                    }
+                    _ => TokenTree::Ident(first_ident),
+                }
+            }
             TokenTree::Group(group) => {
                 let mut stream = TokenStream::new();
-                stream.extend(
-                    group
-                        .stream()
-                        .clone()
-                        .into_iter()
-                        .map(|token| self.map_identifier_recursive(replacement, token)),
-                );
+
+                let mut iter = group.stream().into_iter();
+                while let Some(token) = iter.next() {
+                    stream.extend(std::iter::once(self.map_identifier_recursive(
+                        replacement,
+                        token,
+                        &mut iter,
+                    )));
+                }
 
                 let new_group = Group::new(group.delimiter(), stream);
                 TokenTree::Group(new_group)
