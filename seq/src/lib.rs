@@ -28,48 +28,47 @@ impl Parse for SeqItem {
     }
 }
 
-fn map_identifier_recursive(
-    expected_ident: &syn::Ident,
-    replacement: &TokenTree,
-    tree: TokenTree,
-) -> TokenTree {
-    match tree {
-        TokenTree::Ident(ident) if ident == *expected_ident => replacement.clone(),
-        TokenTree::Group(group) => {
-            let mut stream = TokenStream::new();
-            stream.extend(
-                group
-                    .stream()
-                    .clone()
-                    .into_iter()
-                    .map(|token| map_identifier_recursive(expected_ident, replacement, token)),
-            );
+impl SeqItem {
+    fn expand(&self) -> proc_macro2::TokenStream {
+        let start: u32 = self.start.base10_parse().unwrap();
+        let end: u32 = self.end.base10_parse().unwrap();
+        let body = &self.body;
 
-            let new_group = Group::new(group.delimiter(), stream);
-            TokenTree::Group(new_group)
+        let mut stream = TokenStream::new();
+        for i in start..end {
+            let replacement_identifier = TokenTree::Literal(Literal::u32_unsuffixed(i));
+            stream.extend(
+                body.clone()
+                    .into_iter()
+                    .map(|token| self.map_identifier_recursive(&replacement_identifier, token)),
+            );
         }
-        tt => tt,
+        stream
+    }
+
+    fn map_identifier_recursive(&self, replacement: &TokenTree, tree: TokenTree) -> TokenTree {
+        match tree {
+            TokenTree::Ident(ident) if ident == self.ident => replacement.clone(),
+            TokenTree::Group(group) => {
+                let mut stream = TokenStream::new();
+                stream.extend(
+                    group
+                        .stream()
+                        .clone()
+                        .into_iter()
+                        .map(|token| self.map_identifier_recursive(replacement, token)),
+                );
+
+                let new_group = Group::new(group.delimiter(), stream);
+                TokenTree::Group(new_group)
+            }
+            tt => tt,
+        }
     }
 }
 
 #[proc_macro]
 pub fn seq(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let seq_item = parse_macro_input!(input as SeqItem);
-
-    let start: u32 = seq_item.start.base10_parse().unwrap();
-    let end: u32 = seq_item.end.base10_parse().unwrap();
-    let body = seq_item.body;
-    let loop_ident = seq_item.ident;
-
-    let mut stream = TokenStream::new();
-    for i in start..end {
-        let replacement_identifier = TokenTree::Literal(Literal::u32_unsuffixed(i));
-        stream.extend(
-            body.clone()
-                .into_iter()
-                .map(|token| map_identifier_recursive(&loop_ident, &replacement_identifier, token)),
-        );
-    }
-
-    stream.into()
+    seq_item.expand().into()
 }
