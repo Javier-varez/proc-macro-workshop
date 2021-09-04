@@ -29,24 +29,127 @@ impl Parse for SeqItem {
 }
 
 impl SeqItem {
-    fn expand(&self) -> proc_macro2::TokenStream {
+    fn has_repetition_group(&self, stream: &TokenStream) -> bool {
+        let mut iter = stream.clone().into_iter();
+
+        while let Some(token) = iter.next() {
+            match token {
+                TokenTree::Punct(punct) if punct.as_char() == '#' => {
+                    if let Some(TokenTree::Group(group)) = iter.next() {
+                        if group.delimiter() == proc_macro2::Delimiter::Parenthesis {
+                            if let Some(TokenTree::Punct(punct)) = iter.next() {
+                                if punct.as_char() == '*' {
+                                    // Found repetition group
+                                    return true;
+                                }
+                            }
+                        }
+                    }
+                }
+                TokenTree::Group(group) => {
+                    if self.has_repetition_group(&group.stream()) {
+                        return true;
+                    }
+                }
+                _ => {}
+            }
+        }
+        return false;
+    }
+
+    fn map_repetition_group(
+        &self,
+        token: TokenTree,
+        remaining: &mut proc_macro2::token_stream::IntoIter,
+    ) -> TokenStream {
+        match token {
+            TokenTree::Punct(punct) if punct.as_char() == '#' => {
+                let mut lookup = remaining.clone();
+                if let Some(TokenTree::Group(group)) = lookup.next() {
+                    if group.delimiter() == proc_macro2::Delimiter::Parenthesis {
+                        if let Some(TokenTree::Punct(punct)) = lookup.next() {
+                            remaining.next().unwrap();
+                            remaining.next().unwrap();
+                            if punct.as_char() == '*' {
+                                let mut stream = TokenStream::new();
+                                // Repeat this N times
+                                let start: u32 = self.start.base10_parse().unwrap();
+                                let end: u32 = self.end.base10_parse().unwrap();
+                                for i in start..end {
+                                    let replacement_identifier =
+                                        TokenTree::Literal(Literal::u32_unsuffixed(i));
+                                    let mut inner_iter = group.stream().into_iter();
+                                    while let Some(token) = inner_iter.next() {
+                                        stream.extend(std::iter::once(
+                                            self.map_identifier_recursive(
+                                                &replacement_identifier,
+                                                token,
+                                                &mut inner_iter,
+                                            ),
+                                        ));
+                                    }
+                                }
+
+                                stream
+                            } else {
+                                panic!("Invalid group found");
+                            }
+                        } else {
+                            panic!("Invalid group #() found");
+                        }
+                    } else {
+                        TokenStream::from(TokenTree::Punct(punct))
+                    }
+                } else {
+                    TokenStream::from(TokenTree::Punct(punct))
+                }
+            }
+            TokenTree::Group(group) => {
+                let mut stream = TokenStream::new();
+                let mut inner_iter = group.stream().into_iter();
+                while let Some(token) = inner_iter.next() {
+                    stream.extend(self.map_repetition_group(token, &mut inner_iter));
+                }
+                let new_group =
+                    TokenTree::Group(proc_macro2::Group::new(group.delimiter(), stream));
+                TokenStream::from(new_group)
+            }
+            tt => TokenStream::from(tt),
+        }
+    }
+
+    fn expand_with_repetition_group(&self) -> TokenStream {
+        let mut stream = TokenStream::new();
+        let mut iter = self.body.clone().into_iter();
+        while let Some(token) = iter.next() {
+            stream.extend(self.map_repetition_group(token, &mut iter));
+        }
+        stream
+    }
+
+    fn expand(&self) -> TokenStream {
         let start: u32 = self.start.base10_parse().unwrap();
         let end: u32 = self.end.base10_parse().unwrap();
 
-        let mut stream = TokenStream::new();
-        for i in start..end {
-            let replacement_identifier = TokenTree::Literal(Literal::u32_unsuffixed(i));
+        // eprintln!("{:#?}", self.body);
 
-            let mut iter = self.body.clone().into_iter();
-            while let Some(token) = iter.next() {
-                stream.extend(std::iter::once(self.map_identifier_recursive(
-                    &replacement_identifier,
-                    token,
-                    &mut iter,
-                )));
+        if !self.has_repetition_group(&self.body) {
+            let mut stream = TokenStream::new();
+            for i in start..end {
+                let replacement_identifier = TokenTree::Literal(Literal::u32_unsuffixed(i));
+                let mut iter = self.body.clone().into_iter();
+                while let Some(token) = iter.next() {
+                    stream.extend(std::iter::once(self.map_identifier_recursive(
+                        &replacement_identifier,
+                        token,
+                        &mut iter,
+                    )));
+                }
             }
+            return stream;
+        } else {
+            return self.expand_with_repetition_group();
         }
-        stream
     }
 
     fn map_identifier_recursive(
