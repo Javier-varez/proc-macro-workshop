@@ -6,6 +6,7 @@ struct SeqItem {
     start: syn::LitInt,
     end: syn::LitInt,
     body: TokenStream,
+    inclusive: bool,
 }
 
 impl Parse for SeqItem {
@@ -15,6 +16,10 @@ impl Parse for SeqItem {
         let _: Token![in] = input.parse()?;
         let start: syn::LitInt = input.parse()?;
         let _: Token![..] = input.parse()?;
+        let mut inclusive = false;
+        if let Some(_) = input.parse::<Token![=]>().ok() {
+            inclusive = true;
+        }
         let end: syn::LitInt = input.parse()?;
         let _ = braced!(content in input);
         let body = content.parse()?;
@@ -24,6 +29,7 @@ impl Parse for SeqItem {
             start,
             end,
             body,
+            inclusive,
         })
     }
 }
@@ -73,9 +79,7 @@ impl SeqItem {
                             if punct.as_char() == '*' {
                                 let mut stream = TokenStream::new();
                                 // Repeat this N times
-                                let start: u32 = self.start.base10_parse().unwrap();
-                                let end: u32 = self.end.base10_parse().unwrap();
-                                for i in start..end {
+                                for i in self.get_range() {
                                     let replacement_identifier =
                                         TokenTree::Literal(Literal::u32_unsuffixed(i));
                                     let mut inner_iter = group.stream().into_iter();
@@ -127,15 +131,22 @@ impl SeqItem {
         stream
     }
 
-    fn expand(&self) -> TokenStream {
+    fn get_range(&self) -> std::ops::Range<u32> {
         let start: u32 = self.start.base10_parse().unwrap();
         let end: u32 = self.end.base10_parse().unwrap();
+        if self.inclusive {
+            start..end + 1
+        } else {
+            start..end
+        }
+    }
 
+    fn expand(&self) -> TokenStream {
         // eprintln!("{:#?}", self.body);
 
         if !self.has_repetition_group(&self.body) {
             let mut stream = TokenStream::new();
-            for i in start..end {
+            for i in self.get_range() {
                 let replacement_identifier = TokenTree::Literal(Literal::u32_unsuffixed(i));
                 let mut iter = self.body.clone().into_iter();
                 while let Some(token) = iter.next() {
